@@ -1,6 +1,6 @@
 # Weekly routine
 
-Runs daily. Exits without publishing unless a new gameweek has finalised.
+Runs weekly, on Wednesdays. Exits without publishing unless a new gameweek has finalised.
 
 Artifact: https://claude.ai/code/artifact/1dbdb62f-c2bc-45b2-8cc7-138c72d39d6f
 
