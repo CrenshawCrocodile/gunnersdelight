@@ -27,7 +27,8 @@ it. The script's checks exist to stop bad data reaching the league.
 Step 3. Read out/data.json and note its "throughGW" as NEW_GW.
 If NEW_GW is less than or equal to PUBLISHED_GW, no new gameweek has finalised.
 STOP without publishing and report "no new gameweek, still through GW<N>".
-This is the normal outcome on most days and is a success, not a failure.
+This can happen in some weeks (for example an international break or a gameweek
+not yet finalised) and is a success, not a failure.
 
 Step 4. A new gameweek finalised. Read out/facts.json and write the recap for
 NEW_GW: 6 to 8 short bullet points, the TL;DR a league member wants.
