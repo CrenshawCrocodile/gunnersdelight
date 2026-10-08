@@ -434,7 +434,7 @@ function render(data){
 
   document.getElementById('monthlyBody').innerHTML = data.monthlyWinners.map(m => {
     const statusClass = (m.status === 'live' || m.status === 'final') ? m.status : 'tbd';
-    const statusLabel = m.status === 'live' ? 'In progress' : (m.status === 'final' ? 'Final' : 'TBD');
+    const statusLabel = m.status === 'live' ? 'In progress' : (m.status === 'final' ? 'Paid' : 'TBD');
     return '<tr><td>'+m.period+'</td><td data-label="Status"><span class="status '+statusClass+'">'+statusLabel+'</span></td>'+
       '<td data-label="Leader">'+(m.leader||'—')+'</td><td class="num" data-label="Pts">'+(m.pts ?? '—')+'</td><td class="num" data-label="Payout">$'+m.payout+'</td></tr>';
   }).join('');

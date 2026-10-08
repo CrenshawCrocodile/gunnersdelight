@@ -277,7 +277,10 @@ def build(raw, previous=None, recap_dir="recaps"):
         if p not in seen:
             seen.add(p)
             order.append(p)
-    active = period_for(months[cur])
+    # Tied to the calendar, not to which gameweek has most recently finalised,
+    # so a payout period is marked paid as soon as the new month starts even if
+    # the next gameweek's deadline falls later in that month.
+    active = period_for(dt.date.today().isoformat()[:7])
     monthly = []
     for p in order:
         pgws = [g for g in gws if period_for(months[g]) == p]

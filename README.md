@@ -39,8 +39,10 @@ week and `last_rank` for the week before. Only older weeks, which the API no
 longer reports, fall back to a derived ranking, and any disagreement is logged.
 
 **Payout periods.** August and September pay out together; every later month
-stands alone. "Current Month" sums the active period, and a finished period
-flips to a `final` status with its winner locked in.
+stands alone. "Current Month" sums the active period, where "active" is
+today's calendar month (not the month of the last finalised gameweek). A
+period that is no longer active flips to a `final` status, shown on the page
+as "Paid" with its winner locked in.
 
 **Recap prose.** The one thing that cannot be derived. Precedence:
 `--previous` (the live artifact, so past weeks keep their wording) →
