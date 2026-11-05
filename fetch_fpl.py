@@ -58,3 +58,8 @@ def picks(entry_id, gw):
 def live(gw):
     time.sleep(PAUSE)
     return get("event/%d/live/" % gw)
+
+
+def fixtures():
+    time.sleep(PAUSE)
+    return get("fixtures/")

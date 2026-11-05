@@ -97,9 +97,25 @@ def collect(league_id=LEAGUE_ID):
     elements = {e["id"]: e for e in boot["elements"]}
     teams = {t["id"]: t for t in boot["teams"]}
 
-    live = {}
+    fixtures = api.fixtures()
+    fixture_month = {f["id"]: f["kickoff_time"][:7] for f in fixtures if f.get("kickoff_time")}
+
+    # A gameweek's points are tied to the fixture(s) each player's team actually
+    # played, not to the gameweek's own deadline. A gameweek's matches can
+    # straddle a calendar-month boundary, so keep the per-fixture breakdown
+    # ("explain") alongside the gameweek total for accurate month-by-month splits.
+    live, live_fixtures = {}, {}
     for gw in gws:
-        live[gw] = {e["id"]: e["stats"]["total_points"] for e in api.live(gw)["elements"]}
+        live[gw] = {}
+        live_fixtures[gw] = {}
+        for e in api.live(gw)["elements"]:
+            pid = e["id"]
+            live[gw][pid] = e["stats"]["total_points"]
+            per_fixture = {}
+            for ex in e.get("explain", []):
+                per_fixture[ex["fixture"]] = per_fixture.get(ex["fixture"], 0) + sum(
+                    s["points"] for s in ex["stats"])
+            live_fixtures[gw][pid] = per_fixture
 
     entries, picks = {}, {}
     for r in results:
@@ -110,12 +126,14 @@ def collect(league_id=LEAGUE_ID):
 
     return dict(boot=boot, events=events, current=current, gws=gws, months=months,
                 meta=meta, results=results, elements=elements, teams=teams,
-                live=live, entries=entries, picks=picks)
+                live=live, live_fixtures=live_fixtures, fixture_month=fixture_month,
+                entries=entries, picks=picks)
 
 
 def build(raw, previous=None, recap_dir="recaps"):
     gws, cur, results = raw["gws"], raw["current"], raw["results"]
     picks, live, months = raw["picks"], raw["live"], raw["months"]
+    live_fixtures, fixture_month = raw["live_fixtures"], raw["fixture_month"]
     elements, teams, entries = raw["elements"], raw["teams"], raw["entries"]
     total_mgrs = len(results)
     me = {r["entry"] for r in results if r.get("entry") and
@@ -130,6 +148,24 @@ def build(raw, previous=None, recap_dir="recaps"):
     def cume(pid, gw):
         return sum(live[g].get(pid, 0) for g in gws if g <= gw)
 
+    def period_split(eid, gw):
+        """Split one manager's one-gameweek score by the calendar month each
+        counted player's fixture was actually played in, so a gameweek whose
+        matches span two months pays out to both correctly."""
+        out = {}
+        for pk in picks[(eid, gw)]["picks"]:
+            mult = pk["multiplier"]
+            if not mult:
+                continue
+            pid = pk["element"]
+            for fid, pts in live_fixtures[gw].get(pid, {}).items():
+                mkey = fixture_month.get(fid)
+                if mkey is None:
+                    die("GW%d fixture %d has no known kickoff date" % (gw, fid))
+                p = period_for(mkey)
+                out[p] = out.get(p, 0) + pts * mult
+        return out
+
     # ---- per-gameweek standings ----
     # FPL's own `rank` is not reproducible by competition ranking: in one payload
     # it tied 138/138 at 18 and 113/113 at 20 but split 161/161 into 9 and 10. So
@@ -140,18 +176,23 @@ def build(raw, previous=None, recap_dir="recaps"):
     api_rank = {r["entry"]: r["rank"] for r in results}
     api_last = {r["entry"]: r["last_rank"] for r in results if r.get("last_rank")}
     ranks_by_gw = {}
+    cum_period_pts = {r["entry"]: {} for r in results}
     for gw in gws:
         rows = []
         for r in results:
             eid = r["entry"]
             h = picks[(eid, gw)]["entry_history"]
+            split = period_split(eid, gw)
+            if sum(split.values()) != h["points"]:
+                die("GW%d month split for %s totals %d, API says %d"
+                    % (gw, r["entry_name"], sum(split.values()), h["points"]))
+            for p, pts in split.items():
+                cum_period_pts[eid][p] = cum_period_pts[eid].get(p, 0) + pts
             rows.append({"entry": eid, "name": r["player_name"], "team": r["entry_name"],
                          "total": h["total_points"], "lastGW": h["points"],
                          "transfers": sum(picks[(eid, g)]["entry_history"]["event_transfers"]
                                           for g in gws if g <= gw),
-                         "monthPts": sum(picks[(eid, g)]["entry_history"]["points"]
-                                         for g in gws if g <= gw and
-                                         period_for(months[g]) == period_for(months[gw]))})
+                         "monthPts": cum_period_pts[eid].get(period_for(months[gw]), 0)})
         derived = {r["entry"]: r["rank"] for r in competition_rank(rows, "total")}
         if gw == cur:
             authoritative, source = api_rank, "league API rank"
@@ -271,27 +312,43 @@ def build(raw, previous=None, recap_dir="recaps"):
                                   gwSummary=recap_for(gw), **m)
 
     # ---- payouts ----
+    # A payout period is a calendar window (two, for Aug/Sep), not a set of
+    # whole gameweeks, so its status follows today's date rather than which
+    # gameweek last finalised.
     order, seen = [], set()
     for e in raw["events"]:
         p = period_for(e["deadline_time"][:7])
         if p not in seen:
             seen.add(p)
             order.append(p)
-    active = period_for(months[cur])
+
+    period_months = {}
+    for mkey in set(months.values()) | set(fixture_month.values()):
+        period_months.setdefault(period_for(mkey), set()).add(mkey)
+
+    today_key = dt.date.today().strftime("%Y-%m")
+    active = period_for(today_key)
+
+    def period_status(p):
+        mkeys = period_months.get(p)
+        if not mkeys:
+            return "tbd"
+        if today_key in mkeys:
+            return "live"
+        return "final" if max(mkeys) < today_key else "tbd"
+
     monthly = []
     for p in order:
-        pgws = [g for g in gws if period_for(months[g]) == p]
         payout = 40 if p == "Aug / Sep" else 20
-        if not pgws:
+        has_data = any(p in cum_period_pts[r["entry"]] for r in results)
+        status = period_status(p)
+        if status == "tbd" or not has_data:
             monthly.append({"period": p, "status": "tbd", "leader": None, "pts": None, "payout": payout})
             continue
-        tally = {}
-        for r in results:
-            tally[r["player_name"]] = sum(picks[(r["entry"], g)]["entry_history"]["points"] for g in pgws)
+        tally = {r["player_name"]: cum_period_pts[r["entry"]].get(p, 0) for r in results}
         best = max(tally.values())
         leaders = sorted(n for n, v in tally.items() if v == best)
-        monthly.append({"period": p,
-                        "status": "live" if p == active else "final",
+        monthly.append({"period": p, "status": status,
                         "leader": " and ".join(leaders), "pts": best, "payout": payout})
 
     top = raw["standings_by_gw"][cur][:3]
@@ -307,8 +364,9 @@ def build(raw, previous=None, recap_dir="recaps"):
 
     cur_rows = raw["standings_by_gw"][cur]
     notes = [
-        '"Current Month" sums each manager\'s gameweek scores whose deadline falls inside the '
-        'active payout period (%s). August and September pay out together; every later month stands alone.' % active,
+        '"Current Month" sums each manager\'s points from games actually played within the active '
+        'payout period (%s); a gameweek whose fixtures span two months has its points split between '
+        'them. August and September pay out together; every later month stands alone.' % active,
         "The gameweek picker in the header rewinds the Standings, the Recap and the League Metrics "
         "to any completed week. Chips Played and the Payouts tab always show the latest state.",
         "The movement arrow next to each manager's name compares this week's rank to last week's. "
